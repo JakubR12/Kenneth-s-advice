@@ -1,0 +1,164 @@
+---
+title: "Assignment 1 - Language Development in ASD - Power and simulations"
+author: "[YOUR NAME]"
+date: "[DATE]"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+pacman::p_load(tidyverse, dplyr, ggplot2, lmerTest, lme4, simr,psych)
+
+#trying to resolve problems with errors in ouput in data simulating
+#install.packages("simr", dependencies = T)
+#library(simr)
+
+###loading data
+clean_train<-read.csv(file='df_train_clean.csv',header=TRUE,sep=",")
+clean_test<-read.csv(file='df_test_clean.csv',header=TRUE,sep=",")
+
+
+
+###mergining both dataframes
+clean_test$Child.ID <- clean_test$Child.ID+1000
+comp_data <- merge(clean_train, clean_test, all=T)
+
+
+```
+
+## Welcome to the third exciting part of the Language Development in ASD exercise
+
+In this part of the assignment, we try to figure out how a new study should be planned (i.e. how many participants?) in order to have enough power to replicate the findings (ensuring our sample size is adequate, our alpha at 0.05 and our beta at 0.8):
+1- if we trust the estimates of the current study. Report the power analysis and comment on what you can (or cannot) use its estimates for.
+2- if we are skeptical of the current study. Report the power analysis and comment on what you can (or cannot) use its estimates for.
+3- if we only have access to 30 participants. Identify the power for each relevant effect and discuss whether it's worth to run the study and why
+The list above is also what you should discuss in your code-less report.
+
+
+## Learning objectives
+
+- Learn how to calculate statistical power
+- Critically appraise how to apply frequentist statistical power
+
+### Exercise 1
+
+How much power does your study have (if your model estimates are quite right)?
+- Load your dataset (both training and testing), fit your favorite model, assess power for your effects of interest (probably your interactions).
+- Report the power analysis and comment on what you can (or cannot) use its estimates for.
+- Test how many participants you would have to have to replicate the findings (assuming the findings are correct)
+
+N.B. Remember that main effects are tricky once you have interactions in the model (same for 2-way interactions w 3-way interactions in the model). If you want to test the power of main effects, run a model excluding the interactions.
+N.B. Check this paper: https://besjournals.onlinelibrary.wiley.com/doi/full/10.1111/2041-210X.12504
+You will be using:
+- powerSim() to calculate power
+- powerCurve() to estimate the needed number of participants
+- extend() to simulate more participants
+
+```{r}
+####our best model###
+complexM<- lmer(CHI_MLU~Visit*Diagnosis*verbalIQ1+(1+ Visit|Child.ID),data = comp_data, REML=FALSE,
+                control = lmerControl(optimizer = "nloptwrap", calc.derivs = FALSE))
+summary(complexM)
+
+###Power analysis###
+
+#I have two options - either run one three-way interaction in one powerSim, or run three powersim of two-way interactions
+##option 1
+#power of visit:diagnosis
+complexS0=powerSim(complexM, test=fcompare(~ Visit*Diagnosis*verbalIQ1 - Visit:Diagnosis:verbalIQ1), nsim = 1000, seed = 1, progress = F) # 497.10% (95.86, 98.05)
+complexS0
+
+
+##option2
+#power of visit:verbalIQ1
+complexS1=powerSim(complexM, test = fixed("Visit:Diagnosis", "z"), nsim = 50, seed = 1, progress = F) # 50 errors - subscript out of bounds
+complexS1$errors
+
+#power of visit:verbalIQ1
+complexS2=powerSim(complexM, test = fixed("Visit:verbalIQ1", "z"), nsim = 50, progress = F) # no errors
+complexS2
+
+#power of diagnosis and verbalIQ1
+complexS3 = powerSim(complexM, test = fixed("Diagnosis:verbalIQ1", "z"), nsim = 50, seed = 1, progress = F) # 50 errors -subscript out of bounds
+complexS3$errors
+
+
+
+###How many participants do we need to have enough power for each interaction?###
+
+##extending data
+complexM <- extend(complexM, along = "Child.ID", n = 150)
+
+##plotting power curve for
+
+# visit:diagnosis
+PC1= powerCurve(complexM, test=fcompare(~ Visit*Diagnosis*verbalIQ1 - Visit:Diagnosis:verbalIQ1), along = "Child.ID", nsim = 50, breaks = seq(from = 10, to = 100, by = 5), seed = 1, progress = F)
+plot(PC1)
+
+#visit:verbalIQ1
+PC2= powerCurve(complexM, test = fixed("Visit:VerbalIQ1"), along = "Child.ID", nsim = 10, breaks = seq(from = 10, to = 150, by = 5), seed = 1, progress = F)
+plot(PC2)
+
+#diagnosis:verbalIQ1
+PC3 = powerCurve(complexM, test = fixed("Diagnosis:verbalIQ1"), along = "Child.ID", nsim = 10, breaks = seq(from = 10, to = 120, by = 5), seed = 1, progress = F)
+plot(PC3)
+
+#visit:Ados1
+PC4 = powerCurve(complexM, test = fixed("Visit:Ados1"), along = "Child.ID", nsim = 10, breaks = seq(from = 10, to = 120, by = 5), seed = 1, progress = F)
+plot(PC4)
+
+###the model with least RMSE was 4 way interaction of visit, diagnosis, verbaliq and ados, however, interpreting such model is extremely difficult and tricky and also when doing power analysis, we run into some errors so it is good idea to work with "only" one  three-way interaction model and one two-way interaction instead of full-blown four-way interaction
+
+###attempt to resolve issufe of an convergance with scaling (scale also outcome)
+#clean_train <- mutate(clean_train, scaled_verbalIQ=scale(clean_train$verbalIQ1, center = T, scale = T))
+#clean_train <- mutate(clean_train, scaled_ADOS=scale(clean_train$Ados1, center = T, scale = T))
+#clean_train <- mutate(clean_train, scaled_CHI_MLU=scale(clean_train$CHI_MLU, center = T, scale = T))
+```
+
+
+### Exercise 2
+
+How would you perform a more conservative power analysis?
+- Identify and justify a minimum effect size for each of your relevant effects
+- take the model from exercise 1 and replace the effects with the minimum effect size that you'd accept.
+- assess the power curve by Child.ID, identifying an ideal number of participants to estimate each effect
+- if your power estimates do not reach an acceptable threshold simulate additional participants and repeat the previous analysis
+- Report the power analysis and comment on what you can (or cannot) use its estimates for.
+
+```{r}
+### conservative power analysis - setting manually threshold for fixed effect of interaction
+
+#now we need to decide what minimal effects we will set up. Kenneth
+
+##power of visit:diagnosis
+fixef(complexM)["Visit:DiagnosisTD"] <- 0.15
+powerSim(complexM, test = fixed("Visit:Diagnosis"), nsim = 50, seed = 1, progress = F) # 24% for 0.01, % 46 %for 0.15
+
+
+##power of visit:verbalIQ1
+fixef(complexM)["Visit:verbalIQ1"] <- 0.1
+powerSim(complexM, test = fixed("Visit:verbalIQ1"), nsim = 50, progress = F) # 100 %
+
+##power of Diagnosis:verbalIQ1
+fixef(complexM)["Diagnosis:verbalIQ1"] <- 0.1
+powerSim(complexM, test = fixed("Diagnosis:verbalIQ1"), nsim = 50, progress = F) # 100 %
+
+#power of visit:Ados1
+fixef(complexM)["Visit:Ados1"] <- 0.05 #for 0.005 12%, 0.008 30 %, 0.01 % 40%, 0.05 100% 
+powerSim(complexM, test = fixed("Visit:Ados1"), nsim = 50, seed = 1, progress = F) # 99%
+
+describe(comp_data)
+sd(comp_data$Ados1)
+
+#if I have very different scale within predictors of my model, than scaling helps model to overcome this, but as long as it doesn´t say anything, don´t scale and keep advantage of real values, so to my case - look at the SD of outcome variable and a kind of general advice in psychology is to look at 10 % of SD as a threshold for minimal effects size
+```
+
+
+### Exercise 3
+
+Assume you have only the resources to collect 30 kids (15 with ASD and 15 TDs). Identify the power for each relevant effect and discuss whether it's worth to run the study and why
+
+```{r}
+
+```
